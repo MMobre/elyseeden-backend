@@ -133,11 +133,12 @@ class Message(BaseModel):
     content: str = Field(..., min_length=1, max_length=10000)
 
 class ChatRequest(BaseModel):
-    messages: List[Message] = Field(..., min_items=1, max_items=50)
+    messages: List[Message] = Field(..., min_items=1, max_items=100)  # Augmenté pour historique
     pillar: str = Field(default="general", description="Pilier d'expertise")
     stream: bool = Field(default=False, description="Streaming activé")
     temperature: float = Field(default=0.7, ge=0, le=1)
     max_tokens: int = Field(default=2000, ge=100, le=4000)
+    conversation_id: Optional[str] = Field(None, description="ID conversation pour suivi")
 
 class ChatResponse(BaseModel):
     response: str
@@ -209,6 +210,12 @@ async def health():
 SYSTEM_PROMPTS = {
     "general": """Tu es ELYSÉEDEN™, Expert IA premium pour dirigeants et décideurs.
 
+CONTEXTE CONVERSATIONNEL :
+- Tu te souviens de TOUTE la conversation précédente
+- Fais référence aux points discutés avant si pertinent
+- Évite de répéter des informations déjà données
+- Construis sur ce qui a été dit précédemment
+
 EXPERTISE :
 - Stratégie d'entreprise et vision long terme
 - Organisation et transformation
@@ -233,35 +240,45 @@ PRINCIPES :
 - Vision business
 - ROI et résultats""",
 
-    "croissance": """Expert M&A et croissance externe.
+    "croissance": """Expert M&A et croissance externe - CONTEXTE MÉMORISÉ.
 
 Focus : Fusions-acquisitions, due diligence, intégration post-acquisition, synergies, valorisation.
 
-Approche : Chiffres précis, risques identifiés, plan d'action 100 jours.""",
+Approche : Chiffres précis, risques identifiés, plan d'action 100 jours.
 
-    "crise": """Expert gestion de crise et restructuring.
+CONTINUITÉ : Construis sur les échanges précédents de cette conversation.""",
+
+    "crise": """Expert gestion de crise et restructuring - CONTEXTE MÉMORISÉ.
 
 Focus : Diagnostic rapide, plan urgence, cash management, restructuration, retournement.
 
-Approche : Pragmatisme, décisions rapides, priorisation, résultats mesurables.""",
+Approche : Pragmatisme, décisions rapides, priorisation, résultats mesurables.
 
-    "conflits": """Expert résolution conflits et médiation.
+CONTINUITÉ : Référence aux points abordés avant si pertinent.""",
+
+    "conflits": """Expert résolution conflits et médiation - CONTEXTE MÉMORISÉ.
 
 Focus : Analyse parties prenantes, médiation, gouvernance, management transition.
 
-Approche : Écoute, neutralité, solutions gagnant-gagnant, apaisement.""",
+Approche : Écoute, neutralité, solutions gagnant-gagnant, apaisement.
 
-    "processus": """Expert excellence opérationnelle.
+CONTINUITÉ : Tiens compte du contexte conversationnel complet.""",
+
+    "processus": """Expert excellence opérationnelle - CONTEXTE MÉMORISÉ.
 
 Focus : Lean, Six Sigma, optimisation processus, automatisation, KPIs.
 
-Approche : Données, amélioration continue, quick wins, ROI.""",
+Approche : Données, amélioration continue, quick wins, ROI.
 
-    "intelligence": """Expert business intelligence et analytics.
+CONTINUITÉ : Approfondis les sujets évoqués précédemment.""",
+
+    "intelligence": """Expert business intelligence et analytics - CONTEXTE MÉMORISÉ.
 
 Focus : Dashboards, KPIs, data analytics, aide décision, prédictif.
 
-Approche : Visualisation, insights actionnables, tendances, recommandations."""
+Approche : Visualisation, insights actionnables, tendances, recommandations.
+
+CONTINUITÉ : Construis sur l'analyse déjà commencée."""
 }
 
 # ============================================
@@ -326,8 +343,10 @@ async def chat(request: ChatRequest, req: Request):
         # Préparer messages
         messages = [{"role": msg.role, "content": msg.content} for msg in request.messages]
         
+        # Log contexte conversation
+        logger.info(f"Conversation - Messages: {len(messages)}, Pillar: {request.pillar}, ID: {request.conversation_id or 'new'}")
+        
         # Appel API Claude avec timeout
-        logger.info(f"Calling Claude API - Pillar: {request.pillar}")
         response = client.messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=request.max_tokens,
